@@ -18,8 +18,10 @@ struct myblockInfo
 	LASheader myheader;
 	int X_Block;
 	int Y_Block;
+	double X_OverLap;
+	double Y_OverLap;
 };
-void Points_Statistics(const char*srcPath, int*BlockPointNum,int X_Block, int Y_Block, double X_length, double Y_length)
+void Points_Statistics(const char*srcPath, int*BlockPointNum,int X_Block, int Y_Block, double X_OverLap, double Y_OverLap, double X_length, double Y_length)
 {
 	LASreadOpener lasreadopener;
 	lasreadopener.set_file_name(srcPath);
@@ -33,10 +35,107 @@ void Points_Statistics(const char*srcPath, int*BlockPointNum,int X_Block, int Y_
 		int colX = (x - myheader.min_x) / X_length;
 		int rowY = (y - myheader.min_y) / Y_length;
 		BlockPointNum[colX + rowY * X_Block]++;
+		double localCentreX = myheader.min_x + colX * X_length + X_length / 2;
+		double localCentreY = myheader.min_y + rowY * Y_length + Y_length / 2;
+		if (fabs(x - localCentreX) > (X_length / 2 - X_OverLap) || fabs(y - localCentreY) > (Y_length / 2 - Y_OverLap))
+		{
+			if (rowY < Y_Block - 1 && y - localCentreY >(Y_length / 2 - Y_OverLap) && fabs(x - localCentreX) <= (X_length / 2 - X_OverLap))
+			{
+				BlockPointNum[colX + (rowY + 1)* X_Block]++;
+			}//0
+			else {
+				if (rowY > 0 && y - localCentreY < -(Y_length / 2 - Y_OverLap) && fabs(x - localCentreX) <= (X_length / 2 - X_OverLap))
+				{
+					BlockPointNum[colX + (rowY - 1)* X_Block]++;
+				}//4
+				else
+				{
+					if (colX > 0 && fabs(y - localCentreY) <= (Y_length / 2 - Y_OverLap) && x - localCentreX < -(X_length / 2 - X_OverLap))
+					{
+						BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+					}//6
+					else
+					{
+						if (colX< X_Block - 1 && fabs(y - localCentreY) <= (Y_length / 2 - Y_OverLap) && x - localCentreX >(X_length / 2 - X_OverLap))
+						{
+							BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+						}//2
+						else
+						{
+							if (x - localCentreX > (X_length / 2 - X_OverLap) && y - localCentreY < -(Y_length / 2 - Y_OverLap))
+							{
+								if (colX < X_Block - 1)
+								{
+									BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+									if (rowY > 0)
+									{
+										BlockPointNum[colX + 1 + (rowY - 1)* X_Block]++;
+									}
+								}
+								if (rowY > 0) {
+									BlockPointNum[colX + (rowY - 1)* X_Block]++;
+								}
+							}//3
+							else
+							{
+								if (x - localCentreX > (X_length / 2 - X_OverLap) && y - localCentreY > (Y_length / 2 - Y_OverLap))
+								{
+									if (colX < X_Block - 1)
+									{
+										BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+										if (rowY < Y_Block - 1)
+										{
+											BlockPointNum[colX + 1 + (rowY + 1)* X_Block]++;
+										}
+									}
+									if (rowY < Y_Block - 1) {
+										BlockPointNum[colX + (rowY + 1)* X_Block]++;
+									}
+								}//1
+								else
+								{
+									if (x - localCentreX <-(X_length / 2 - X_OverLap) && y - localCentreY >(Y_length / 2 - Y_OverLap))
+									{
+										if (colX > 0)
+										{
+											BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+											if (rowY < Y_Block - 1)
+											{
+												BlockPointNum[colX - 1 + (rowY + 1)* X_Block]++;
+											}
+										}
+										if (rowY < Y_Block - 1) {
+											BlockPointNum[colX + (rowY + 1)* X_Block]++;
+										}
+									}//7
+									else
+									{
+										if (x - localCentreX < -(X_length / 2 - X_OverLap) && y - localCentreY < -(Y_length / 2 - Y_OverLap))
+										{
+											if (colX > 0)
+											{
+												BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+												if (rowY > 0)
+												{
+													BlockPointNum[colX - 1 + (rowY - 1)* X_Block]++;
+												}
+											}
+											if (rowY > 0) {
+												BlockPointNum[colX + (rowY - 1)* X_Block]++;
+											}
+										}//5
+									}//else
+								}//else
+							}//else
+						}//else
+					}//else
+				}//else
+			}//else
+		}
 	}
 	lasreader->close();
 }
-void Points_Block(const char*srcPath, const char*dstPathDir, int X_Block, int Y_Block,  vector<string>&blockPaths, int*&blockIndex, int*&blockNum, LASheader&lasHdr)
+void Points_Block(const char*srcPath, const char*dstPathDir, int X_Block, int Y_Block, double X_OverLap, double Y_OverLap,vector<string>&blockPaths, int*&blockIndex, int*&blockNum, LASheader&lasHdr)
 {
 	blockIndex = new int[X_Block*Y_Block];
 	blockPaths.clear();
@@ -70,7 +169,7 @@ void Points_Block(const char*srcPath, const char*dstPathDir, int X_Block, int Y_
 			int O_Num = 20000000;//每次1000万；
 			int O_startNum = 0;
 			int ReadNum = ceil(1.0*las_pt_sum / O_Num);
-			Points_Statistics(srcPath, BlockPointNum,X_Block, Y_Block, X_length, Y_length);
+			Points_Statistics(srcPath, BlockPointNum,X_Block, Y_Block, X_OverLap, Y_OverLap,X_length, Y_length);
             int*BlockPoint_Start = new int[X_Block*Y_Block];//不重复的格网点个数//
 			for (int i = 0; i < X_Block*Y_Block; i++)
 			{
@@ -101,10 +200,10 @@ void Points_Block(const char*srcPath, const char*dstPathDir, int X_Block, int Y_
 					tempHdr.point_data_record_length = 28;	
 					tempHdr.min_z = lasHdr.min_z;
 					tempHdr.max_z = lasHdr.max_z;
-					tempHdr.min_x = max(Xmin, Xmin + i * X_length );
-					tempHdr.max_x = min(Xmax, Xmin + (i + 1) * X_length);
-					tempHdr.min_y = max(Ymin, Ymin + j * Y_length);
-					tempHdr.max_y = min(Ymax, Ymin + (j + 1) * Y_length );
+					tempHdr.min_x = max(Xmin, Xmin + i * X_length- X_OverLap);
+					tempHdr.max_x = min(Xmax, Xmin + (i + 1) * X_length+ X_OverLap);
+					tempHdr.min_y = max(Ymin, Ymin + j * Y_length - Y_OverLap);
+					tempHdr.max_y = min(Ymax, Ymin + (j + 1) * Y_length + Y_OverLap);
 					tempHdr.number_of_point_records = BlockPointNum[i + j * X_Block];
 					pt.init(&tempHdr, tempHdr.point_data_format, tempHdr.point_data_record_length, 0);
 					las_file_Out[i + j * X_Block].set_file_name(outPath);
@@ -131,6 +230,135 @@ void Points_Block(const char*srcPath, const char*dstPathDir, int X_Block, int Y_
 				BlockPointNum[colX + rowY * X_Block]++;
 				laswriter[colX + rowY * X_Block]->write_point(&pt);
 				laswriter[colX + rowY * X_Block]->update_inventory(&pt);
+				double localCentreX = lasHdr.min_x + colX * X_length + X_length / 2;
+				double localCentreY = lasHdr.min_y + rowY * Y_length + Y_length / 2;
+				if (fabs(x - localCentreX) > (X_length / 2 - X_OverLap) || fabs(y - localCentreY) > (Y_length / 2 - Y_OverLap))
+				{
+					if (rowY < Y_Block - 1 && y - localCentreY >(Y_length / 2 - Y_OverLap) && fabs(x - localCentreX) <= (X_length / 2 - X_OverLap))
+					{
+						BlockPointNum[colX + (rowY + 1)* X_Block]++;
+						laswriter[colX + (rowY + 1)* X_Block]->write_point(&pt);
+						laswriter[colX + (rowY + 1)* X_Block]->update_inventory(&pt);
+					}//0
+					else {
+						if (rowY > 0 && y - localCentreY < -(Y_length / 2 - Y_OverLap) && fabs(x - localCentreX) <= (X_length / 2 - X_OverLap))
+						{
+							BlockPointNum[colX + (rowY - 1)* X_Block]++;
+							laswriter[colX + (rowY - 1)* X_Block]->write_point(&pt);
+							laswriter[colX + (rowY - 1)* X_Block]->update_inventory(&pt);
+						}//4
+						else
+						{
+							if (colX > 0 && fabs(y - localCentreY) <= (Y_length / 2 - Y_OverLap) && x - localCentreX < -(X_length / 2 - X_OverLap))
+							{
+								BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+								laswriter[colX - 1 + (rowY)* X_Block]->write_point(&pt);
+								laswriter[colX - 1 + (rowY)* X_Block]->update_inventory(&pt);
+							}//6
+							else
+							{
+								if (colX< X_Block - 1 && fabs(y - localCentreY) <= (Y_length / 2 - Y_OverLap) && x - localCentreX >(X_length / 2 - X_OverLap))
+								{
+									BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+									laswriter[colX + 1 + (rowY)* X_Block]->write_point(&pt);
+									laswriter[colX + 1 + (rowY)* X_Block]->update_inventory(&pt);
+								}//2
+								else
+								{
+									if (x - localCentreX > (X_length / 2 - X_OverLap) && y - localCentreY < -(Y_length / 2 - Y_OverLap))
+									{
+										if (colX < X_Block - 1)
+										{
+											BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+											laswriter[colX + 1 + (rowY)* X_Block]->write_point(&pt);
+											laswriter[colX + 1 + (rowY)* X_Block]->update_inventory(&pt);
+											if (rowY > 0)
+											{
+												BlockPointNum[colX + 1 + (rowY - 1)* X_Block]++;
+												laswriter[colX + 1 + (rowY - 1)* X_Block]->write_point(&pt);
+												laswriter[colX + 1 + (rowY - 1)* X_Block]->update_inventory(&pt);
+											}
+										}
+										if (rowY > 0) {
+											BlockPointNum[colX + (rowY - 1)* X_Block]++;
+											laswriter[colX + (rowY - 1)* X_Block]->write_point(&pt);
+											laswriter[colX + (rowY - 1)* X_Block]->update_inventory(&pt);
+										}
+									}//3
+									else
+									{
+										if (x - localCentreX > (X_length / 2 - X_OverLap) && y - localCentreY > (Y_length / 2 - Y_OverLap))
+										{
+											if (colX < X_Block - 1)
+											{
+												BlockPointNum[colX + 1 + (rowY)* X_Block]++;
+												laswriter[colX + 1 + (rowY)* X_Block]->write_point(&pt);
+												laswriter[colX + 1 + (rowY)* X_Block]->update_inventory(&pt);
+												if (rowY < Y_Block - 1)
+												{
+													BlockPointNum[colX + 1 + (rowY + 1)* X_Block]++;
+													laswriter[colX + 1 + (rowY + 1)* X_Block]->write_point(&pt);
+													laswriter[colX + 1 + (rowY + 1)* X_Block]->update_inventory(&pt);
+												}
+											}
+											if (rowY < Y_Block - 1) {
+												BlockPointNum[colX + (rowY + 1)* X_Block]++;
+												laswriter[colX + (rowY + 1)* X_Block]->write_point(&pt);
+												laswriter[colX + (rowY + 1)* X_Block]->update_inventory(&pt);
+											}
+										}//1
+										else
+										{
+											if (x - localCentreX <-(X_length / 2 - X_OverLap) && y - localCentreY >(Y_length / 2 - Y_OverLap))
+											{
+												if (colX > 0)
+												{
+													BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+													laswriter[colX - 1 + (rowY)* X_Block]->write_point(&pt);
+													laswriter[colX - 1 + (rowY)* X_Block]->update_inventory(&pt);
+													if (rowY < Y_Block - 1)
+													{
+														BlockPointNum[colX - 1 + (rowY + 1)* X_Block]++;
+														laswriter[colX - 1 + (rowY + 1)* X_Block]->write_point(&pt);
+														laswriter[colX - 1 + (rowY + 1)* X_Block]->update_inventory(&pt);
+													}
+												}
+												if (rowY < Y_Block - 1) {
+													BlockPointNum[colX + (rowY + 1)* X_Block]++;
+													laswriter[colX + (rowY + 1)* X_Block]->write_point(&pt);
+													laswriter[colX + (rowY + 1)* X_Block]->update_inventory(&pt);
+												}
+											}//7
+											else
+											{
+												if (x - localCentreX < -(X_length / 2 - X_OverLap) && y - localCentreY < -(Y_length / 2 - Y_OverLap))
+												{
+													if (colX > 0)
+													{
+														BlockPointNum[colX - 1 + (rowY)* X_Block]++;
+														laswriter[colX - 1 + (rowY)* X_Block]->write_point(&pt);
+														laswriter[colX - 1 + (rowY)* X_Block]->update_inventory(&pt);
+														if (rowY > 0)
+														{
+															BlockPointNum[colX - 1 + (rowY - 1)* X_Block]++;
+															laswriter[colX - 1 + (rowY - 1)* X_Block]->write_point(&pt);
+															laswriter[colX - 1 + (rowY - 1)* X_Block]->update_inventory(&pt);
+														}
+													}
+													if (rowY > 0) {
+														BlockPointNum[colX + (rowY - 1)* X_Block]++;
+														laswriter[colX + (rowY - 1)* X_Block]->write_point(&pt);
+														laswriter[colX + (rowY - 1)* X_Block]->update_inventory(&pt);
+													}
+												}//5
+											}//else
+										}//else
+									}//else
+								}//else
+							}//else
+						}//else
+					}//else
+				}
 				
 			}//for//
 			lasreader2->close();
@@ -158,7 +386,7 @@ void getBlockInfo(const char*srcPath, myblockInfo&lasBlockInfo)
 	double Zmax = myheader.max_z;
 	//根据数量来划分格网//
 	//每块不超过两千万//
-	int blockNum = ceil(1.0*las_pt_sum / 1000000);
+	int blockNum = ceil(1.0*las_pt_sum / 100000);
 	double xyscale = (Ymax -Ymin) / (Xmax - Xmin);
 	int xblock = max(1, ceil(sqrt(blockNum / xyscale)));
 	int yblock = ceil(1.0*blockNum / xblock);
@@ -166,10 +394,12 @@ void getBlockInfo(const char*srcPath, myblockInfo&lasBlockInfo)
 	double Y_length = (Ymax - Ymin) / yblock;
 	X_length += 0.01;
 	Y_length += 0.01;//扩张1cm;前闭后开
-	double xoverlap = min(5.0, X_length / 20);
-	double yoverlap = min(5.0, Y_length / 20);
+	double xoverlap = min(2.0, X_length / 20);
+	double yoverlap = min(2.0, Y_length / 20);
 	lasBlockInfo.X_Block = xblock;
 	lasBlockInfo.Y_Block = yblock;
+	lasBlockInfo.X_OverLap = xoverlap;
+	lasBlockInfo.Y_OverLap = yoverlap;
 }
 //点云分块函数//
 void getRunPathDir(string &CPrunPath)
@@ -424,7 +654,7 @@ int main(int argc, char**argv)
 		_mkdir(BlockPath);
 	}
 	int*PathsIndex;
-	Points_Block(argv[1], BlockPath, lasBlockInfo.X_Block, lasBlockInfo.Y_Block,  blockPaths, PathsIndex, blockNum, lasHdr);
+	Points_Block(argv[1], BlockPath, lasBlockInfo.X_Block, lasBlockInfo.Y_Block, lasBlockInfo.X_OverLap, lasBlockInfo.Y_OverLap, blockPaths, PathsIndex, blockNum, lasHdr);
 	
 	vector<string>borderPaths;
 	char BorderPath[PATH_SIZE];

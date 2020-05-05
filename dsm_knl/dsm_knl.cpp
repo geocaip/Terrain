@@ -1,10 +1,7 @@
 //2091208改进，将dsm_out.ini改进到tsk同目录下的文件//
-#include<map>
-#include<set>
-#include<list>
+
 #include<malloc.h>
 #include<time.h>
-#define REAL double
 #include "gdal_priv.h"  
 #include "ogrsf_frmts.h" //for ogr  
 #include "gdal_alg.h"  //for GDALPolygonize  
@@ -14,13 +11,9 @@
 #include "lasreader.hpp"
 #include"laswriter.hpp"
 using namespace std;
-#define ANSI_DECLARATORS 
-extern "C"
-{
-#include "triangle.h"
-}
 #define PATH_SIZE 256
-
+#include"opencv2/flann/miniflann.hpp"
+using namespace cv;
 struct myRegon {
 	double xmin;
 	double xmax;
@@ -48,95 +41,7 @@ struct CloudHeader
 	double max_z;
 	double min_z;
 };
-void Triangle(double*points, int Num, vector<vector<int>>&myTriangle)
-{
-	struct triangulateio in, mid, vorout;
-	in.numberofpoints = Num;
-	in.numberofpointattributes = 1;
-
-	in.pointlist = (REAL *)malloc(in.numberofpoints * 2 * sizeof(REAL));
-	for (int i = 0; i < 2 * Num; i++)
-	{
-		in.pointlist[i] = points[i];
-	}
-	in.pointattributelist = (REAL *)malloc(in.numberofpoints *
-		in.numberofpointattributes *
-		sizeof(REAL));
-	in.pointmarkerlist = (int *)malloc(in.numberofpoints * sizeof(int));
-	//特征值和标记值都默认为零
-	for (int i = 0; i < Num; i++)
-	{
-		in.pointattributelist[i] = 0.0;
-		in.pointmarkerlist[i] = 0;
-	}
-	in.numberofsegments = 0;
-	in.numberofholes = 0;
-	in.numberofregions = 0;
-	// in.regionlist = (REAL *) malloc(in.numberofregions * 4 * sizeof(REAL));
-	//in.regionlist[0] = 0.5;
-	//in.regionlist[1] = 5.0;
-	// in.regionlist[2] = 7.0;            /* Regional attribute (for whole mesh). */
-	//  in.regionlist[3] = 0.1;          /* Area constraint that will not be used. */
-
-	//printf("Input point set:\n\n");
-	//report(&in, 1, 0, 0, 0, 0, 0);
-
-	/* Make necessary initializations so that Triangle can return a */
-	/*   triangulation in `mid' and a voronoi diagram in `vorout'.  */
-
-	mid.pointlist = (REAL *)NULL;            /* Not needed if -N switch used. */
-											 /* Not needed if -N switch used or number of point attributes is zero: */
-	mid.pointattributelist = (REAL *)NULL;
-	mid.pointmarkerlist = (int *)NULL; /* Not needed if -N or -B switch used. */
-	mid.trianglelist = (int *)NULL;          /* Not needed if -E switch used. */
-											 /* Not needed if -E switch used or number of triangle attributes is zero: */
-	mid.triangleattributelist = (REAL *)NULL;
-	mid.neighborlist = (int *)NULL;         /* Needed only if -n switch used. */
-											/* Needed only if segments are output (-p or -c) and -P not used: */
-	mid.segmentlist = (int *)NULL;
-	/* Needed only if segments are output (-p or -c) and -P and -B not used: */
-	mid.segmentmarkerlist = (int *)NULL;
-	mid.edgelist = (int *)NULL;             /* Needed only if -e switch used. */
-	mid.edgemarkerlist = (int *)NULL;   /* Needed if -e used and -B not used. */
-
-	vorout.pointlist = (REAL *)NULL;        /* Needed only if -v switch used. */
-											/* Needed only if -v switch used and number of attributes is not zero: */
-	vorout.pointattributelist = (REAL *)NULL;
-	vorout.edgelist = (int *)NULL;          /* Needed only if -v switch used. */
-	vorout.normlist = (REAL *)NULL;    		/*   neighbor list (n).                                              */
-	char*p = new char[9];
-	strcpy_s(p, 9, "pczAevn");
-	triangulate(p, &in, &mid, &vorout);
-	vector<int>tempVector;
-	tempVector.clear();
-	for (int i = 0; i < mid.numberoftriangles; i++) {
-		int temp1 = mid.trianglelist[i * mid.numberofcorners + 0];
-		int temp2 = mid.trianglelist[i * mid.numberofcorners + 1];
-		int temp3 = mid.trianglelist[i * mid.numberofcorners + 2];
-		//mid.neighborlist
-		tempVector.clear();
-		tempVector.push_back(temp1); tempVector.push_back(temp2); tempVector.push_back(temp3);
-		myTriangle.push_back(tempVector);
-	}
-	free(in.pointlist);
-	free(in.pointattributelist);
-	free(in.pointmarkerlist);
-	free(mid.pointlist);
-	free(mid.pointattributelist);
-	free(mid.pointmarkerlist);
-	free(mid.trianglelist);
-	free(mid.triangleattributelist);
-	free(mid.neighborlist);
-	free(mid.segmentlist);
-	free(mid.segmentmarkerlist);
-	free(mid.edgelist);
-	free(mid.edgemarkerlist);
-	free(vorout.pointlist);
-	free(vorout.pointattributelist);
-	free(vorout.edgelist);
-	free(vorout.normlist);
-}	 
-bool InitialProc(point3D*points, int num, CloudHeader mylasHdr, double*&points_after, double*&myZ, int&myNum)
+bool InitialProc(point3D*points, int num, CloudHeader mylasHdr, vector<cv::Point2f>&points_after, vector<float>&points_z)
 {
 	//先将所有点分到格网中;
 	//一个格网大概有4-5个点;
@@ -219,283 +124,15 @@ bool InitialProc(point3D*points, int num, CloudHeader mylasHdr, double*&points_a
 		}
 	gridPoints.clear();
 	delete[]gridNum;
-	myNum = residualPoints.size();
-	points_after = new double[residualPoints.size() * 2];
-	myZ = new double[residualPoints.size()];
+	points_after.clear();
 	for (int i = 0; i < residualPoints.size(); i++)
 	{
-		double localPointx = points[residualPoints[i]].X*mylasHdr.x_scale_factor + mylasHdr.x_offset;
-		double localPointy = points[residualPoints[i]].Y*mylasHdr.y_scale_factor + mylasHdr.y_offset;
-		double localPointz = points[residualPoints[i]].Z*mylasHdr.z_scale_factor + mylasHdr.z_offset;
-		points_after[2 * i] = localPointx;
-		points_after[2 * i + 1] = localPointy;
-		myZ[i] = localPointz;
+		cv::Point2f tempPoint2f;
+		tempPoint2f.x=points[residualPoints[i]].X*mylasHdr.x_scale_factor + mylasHdr.x_offset;
+		tempPoint2f.y = points[residualPoints[i]].Y*mylasHdr.y_scale_factor + mylasHdr.y_offset;
+		points_z.push_back(points[residualPoints[i]].Z*mylasHdr.z_scale_factor + mylasHdr.z_offset);
+		points_after.push_back(tempPoint2f);
 	}
-}
-//考虑到邻域三角网//
-void Triangle_Neighbor(double*points, int Num, int**&myTriangle, int**&nb_Triangle, int&TriNum)
-{
-	struct triangulateio in, mid, vorout;
-	in.numberofpoints = Num;
-	in.numberofpointattributes = 1;
-	in.pointlist = (REAL *)malloc(in.numberofpoints * 2 * sizeof(REAL));
-	for (int i = 0; i < 2 * Num; i++)
-	{
-		in.pointlist[i] = points[i];
-	}
-	in.pointattributelist = (REAL *)malloc(in.numberofpoints *
-		in.numberofpointattributes *
-		sizeof(REAL));
-	in.pointmarkerlist = (int *)malloc(in.numberofpoints * sizeof(int));
-	//特征值和标记值都默认为零
-	for (int i = 0; i < Num; i++)
-	{
-		in.pointattributelist[i] = 0.0;
-		in.pointmarkerlist[i] = 0;
-	}
-	in.numberofsegments = 0;
-	in.numberofholes = 0;
-	in.numberofregions = 0;
-	// in.regionlist = (REAL *) malloc(in.numberofregions * 4 * sizeof(REAL));
-	//in.regionlist[0] = 0.5;
-	//in.regionlist[1] = 5.0;
-	// in.regionlist[2] = 7.0;            /* Regional attribute (for whole mesh). */
-	//  in.regionlist[3] = 0.1;          /* Area constraint that will not be used. */
-
-	//printf("Input point set:\n\n");
-	//report(&in, 1, 0, 0, 0, 0, 0);
-
-	/* Make necessary initializations so that Triangle can return a */
-	/*   triangulation in `mid' and a voronoi diagram in `vorout'.  */
-	mid.pointlist = (REAL *)NULL;  		 /* Not needed if -N switch used or number of point attributes is zero: */
-	mid.pointattributelist = (REAL *)NULL;
-	mid.pointmarkerlist = (int *)NULL; /* Not needed if -N or -B switch used. */
-	mid.trianglelist = (int *)NULL;   	 /* Not needed if -E switch used or number of triangle attributes is zero: */
-	mid.triangleattributelist = (REAL *)NULL;
-	mid.neighborlist = (int *)NULL;  		/* Needed only if segments are output (-p or -c) and -P not used: */
-	mid.segmentlist = (int *)NULL;
-	/* Needed only if segments are output (-p or -c) and -P and -B not used: */
-	mid.segmentmarkerlist = (int *)NULL;
-	mid.edgelist = (int *)NULL;             /* Needed only if -e switch used. */
-	mid.edgemarkerlist = (int *)NULL;
-	vorout.pointlist = (REAL *)NULL;  		/* Needed only if -v switch used and number of attributes is not zero: */
-	vorout.pointattributelist = (REAL *)NULL;
-	vorout.edgelist = (int *)NULL;          /* Needed only if -v switch used. */
-	vorout.normlist = (REAL *)NULL;    		/*   neighbor list (n).                                              */
-	char*p = new char[9];
-	strcpy_s(p, 9, "pczAevn");
-	triangulate(p, &in, &mid, &vorout);
-	int tempVector[3];
-	int tempVector1[3];
-	TriNum = mid.numberoftriangles;
-	myTriangle = new int*[TriNum];
-	for (int i = 0; i < TriNum; i++)
-	{
-		myTriangle[i] = new int[3];
-	}
-	nb_Triangle = new int*[TriNum];
-	for (int i = 0; i < TriNum; i++)
-	{
-		nb_Triangle[i] = new int[3];
-	}
-	for (int i = 0; i < TriNum; i++) {
-		int temp1 = mid.trianglelist[i * mid.numberofcorners + 0];
-		int temp2 = mid.trianglelist[i * mid.numberofcorners + 1];
-		int temp3 = mid.trianglelist[i * mid.numberofcorners + 2];
-		int temp4 = mid.neighborlist[i * 3 + 0];
-		int temp5 = mid.neighborlist[i * 3 + 1];
-		int temp6 = mid.neighborlist[i * 3 + 2];
-		//mid.neighborlist
-		myTriangle[i][0] = temp1; myTriangle[i][1] = temp2; myTriangle[i][2] = temp3;
-		nb_Triangle[i][0] = temp4; nb_Triangle[i][1] = temp5; nb_Triangle[i][2] = temp6;
-	}
-	free(in.pointlist);
-	free(in.pointattributelist);
-	free(in.pointmarkerlist);
-	free(mid.pointlist);
-	free(mid.pointattributelist);
-	free(mid.pointmarkerlist);
-	free(mid.trianglelist);
-	free(mid.triangleattributelist);
-	free(mid.neighborlist);
-	free(mid.segmentlist);
-	free(mid.segmentmarkerlist);
-	free(mid.edgelist);
-	free(mid.edgemarkerlist);
-	free(vorout.pointlist);
-	free(vorout.pointattributelist);
-	free(vorout.edgelist);
-	free(vorout.normlist);
-}
-void Interpola_Neighbor(myRegon blockRegion, double*points_after, double*myZ, int Num_after, int**myTriangle, int**nb_Triangle, int triNum, double xresolution, double yresolution, float*&DEMData)
-{
-	double adsTransform[6];
-	adsTransform[0] = blockRegion.xmin;
-	adsTransform[3] = blockRegion.ymax;
-	adsTransform[2] = 0;
-	adsTransform[4] = 0;
-	adsTransform[1] = xresolution;
-	adsTransform[5] = yresolution;
-	int m_nwidth = (blockRegion.xmax - blockRegion.xmin) / adsTransform[1];
-	int m_nheight = (blockRegion.ymin - blockRegion.ymax) / adsTransform[5];
-	DEMData = new float[m_nwidth*m_nheight];
-	for (int i = 0; i < m_nwidth*m_nheight; i++)
-	{
-		DEMData[i] = -9999;
-	}
-	//开始内插//
-	for (int i = 0; i < triNum; i++) {
-		int temp1 = myTriangle[i][0];
-		int temp2 = myTriangle[i][1];
-		int temp3 = myTriangle[i][2];
-		double x1 = points_after[2 * temp1];
-		double y1 = points_after[2 * temp1 + 1];
-		double z1 = myZ[temp1];
-		double x2 = points_after[2 * temp2];
-		double y2 = points_after[2 * temp2 + 1];
-		double z2 = myZ[temp2];
-		double x3 = points_after[2 * temp3];
-		double y3 = points_after[2 * temp3 + 1];
-		double z3 = myZ[temp3];
-		double xmin = min(x3, min(x1, x2));
-		double xmax = max(x3, max(x1, x2));
-		double ymin = min(y3, min(y1, y2));
-		double ymax = max(y3, max(y1, y2));
-		double zmin = min(z1, min(z2, z3));
-		double zmax = max(z1, max(z2, z3));
-		int startX = (xmin - adsTransform[0]) / adsTransform[1];
-		int endX = (xmax - adsTransform[0]) / adsTransform[1];
-		int startY = (ymax - adsTransform[3]) / adsTransform[5];
-		int endY = (ymin - adsTransform[3]) / adsTransform[5];
-		for (int ii = startX + 1; ii <= endX; ii++)
-			for (int jj = startY + 1; jj <= endY; jj++)
-			{
-				double localX = ii * adsTransform[1] + adsTransform[0];
-				double localY = jj * adsTransform[5] + adsTransform[3];
-				double area1 = abs((x1 - localX)*(y2 - localY) - (y1 - localY)*(x2 - localX));
-				double area2 = abs((x1 - localX)*(y3 - localY) - (y1 - localY)*(x3 - localX));
-				double area3 = abs((x2 - localX)*(y3 - localY) - (y2 - localY)*(x3 - localX));
-				double area = abs((x2 - x1)*(y3 - y1) - (y2 - y1)*(x3 - x1));
-				if (fabs(area1 + area2 + area3 - area) < 0.00001&&ii >= 0 && ii < m_nwidth&&jj >= 0 && jj < m_nheight)
-				{
-					//插值
-					double d1 = sqrt((x1 - localX)*(x1 - localX) + (y1 - localY)*(y1 - localY));
-					double d2 = sqrt((x2 - localX)*(x2 - localX) + (y2 - localY)*(y2 - localY));
-					double d3 = sqrt((x3 - localX)*(x3 - localX) + (y3 - localY)*(y3 - localY));
-					double IPZ = (d2*d3*z1 + d1 * d3*z2 + d1 * d2*z3) / (d2*d3 + d1 * d3 + d1 * d2);
-					//DEMData[jj*m_nwidth + ii] = (d2*d3*z1 + d1 * d3*z2 + d1 * d2*z3) / (d2*d3 + d1 * d3 + d1 * d2);
-					//temp1//temp2//temp3//
-					vector<double>localZ;
-					vector<double>localWeight;
-					localZ.clear(); localWeight.clear();
-					if (nb_Triangle[i][0] != -1)
-					{
-						double localdistance = area3 / sqrt((y3 - y2)*(y3 - y2) + (x3 - x2)*(x3 - x2));
-						localWeight.push_back(1 / localdistance);
-						int localtemp1 = myTriangle[nb_Triangle[i][0]][0];
-						int localtemp2 = myTriangle[nb_Triangle[i][0]][1];
-						int localtemp3 = myTriangle[nb_Triangle[i][0]][2];
-						double localx1 = points_after[2 * localtemp1];
-						double localy1 = points_after[2 * localtemp1 + 1];
-						double localz1 = myZ[localtemp1];
-						double localx2 = points_after[2 * localtemp2];
-						double localy2 = points_after[2 * localtemp2 + 1];
-						double localz2 = myZ[localtemp2];
-						double localx3 = points_after[2 * localtemp3];
-						double localy3 = points_after[2 * localtemp3 + 1];
-						double localz3 = myZ[localtemp3];
-						double locald1 = sqrt((localx1 - localX)*(localx1 - localX) + (localy1 - localY)*(localy1 - localY));
-						double locald2 = sqrt((localx2 - localX)*(localx2 - localX) + (localy2 - localY)*(localy2 - localY));
-						double locald3 = sqrt((localx3 - localX)*(localx3 - localX) + (localy3 - localY)*(localy3 - localY));
-						double tempZ = (locald2*locald3*localz1 + locald1 * locald3*localz2 + locald1 * locald2*localz3) / (locald2*locald3 + locald1 * locald3 + locald1 * locald2);
-						localZ.push_back(tempZ);
-						if (localdistance < 0.00001)
-						{
-							localZ.pop_back();
-							localWeight.pop_back();
-						}
-
-					}
-					if (nb_Triangle[i][1] != -1)
-					{
-						double localdistance = area2 / sqrt((y3 - y1)*(y3 - y1) + (x3 - x1)*(x3 - x1));
-						localWeight.push_back(1 / localdistance);
-						int localtemp1 = myTriangle[nb_Triangle[i][1]][0];
-						int localtemp2 = myTriangle[nb_Triangle[i][1]][1];
-						int localtemp3 = myTriangle[nb_Triangle[i][1]][2];
-						double localx1 = points_after[2 * localtemp1];
-						double localy1 = points_after[2 * localtemp1 + 1];
-						double localz1 = myZ[localtemp1];
-						double localx2 = points_after[2 * localtemp2];
-						double localy2 = points_after[2 * localtemp2 + 1];
-						double localz2 = myZ[localtemp2];
-						double localx3 = points_after[2 * localtemp3];
-						double localy3 = points_after[2 * localtemp3 + 1];
-						double localz3 = myZ[localtemp3];
-						double locald1 = sqrt((localx1 - localX)*(localx1 - localX) + (localy1 - localY)*(localy1 - localY));
-						double locald2 = sqrt((localx2 - localX)*(localx2 - localX) + (localy2 - localY)*(localy2 - localY));
-						double locald3 = sqrt((localx3 - localX)*(localx3 - localX) + (localy3 - localY)*(localy3 - localY));
-						double tempZ = (locald2*locald3*localz1 + locald1 * locald3*localz2 + locald1 * locald2*localz3) / (locald2*locald3 + locald1 * locald3 + locald1 * locald2);
-						localZ.push_back(tempZ);
-						if (localdistance < 0.00001)
-						{
-							localZ.pop_back();
-							localWeight.pop_back();
-						}
-					}
-					if (nb_Triangle[i][2] != -1)
-					{
-						double localdistance = area1 / sqrt((y2 - y1)*(y2 - y1) + (x2 - x1)*(x2 - x1));
-						localWeight.push_back(1 / localdistance);
-						int localtemp1 = myTriangle[nb_Triangle[i][2]][0];
-						int localtemp2 = myTriangle[nb_Triangle[i][2]][1];
-						int localtemp3 = myTriangle[nb_Triangle[i][2]][2];
-						double localx1 = points_after[2 * localtemp1];
-						double localy1 = points_after[2 * localtemp1 + 1];
-						double localz1 = myZ[localtemp1];
-						double localx2 = points_after[2 * localtemp2];
-						double localy2 = points_after[2 * localtemp2 + 1];
-						double localz2 = myZ[localtemp2];
-						double localx3 = points_after[2 * localtemp3];
-						double localy3 = points_after[2 * localtemp3 + 1];
-						double localz3 = myZ[localtemp3];
-						double locald1 = sqrt((localx1 - localX)*(localx1 - localX) + (localy1 - localY)*(localy1 - localY));
-						double locald2 = sqrt((localx2 - localX)*(localx2 - localX) + (localy2 - localY)*(localy2 - localY));
-						double locald3 = sqrt((localx3 - localX)*(localx3 - localX) + (localy3 - localY)*(localy3 - localY));
-						double tempZ = (locald2*locald3*localz1 + locald1 * locald3*localz2 + locald1 * locald2*localz3) / (locald2*locald3 + locald1 * locald3 + locald1 * locald2);
-						localZ.push_back(tempZ);
-						if (localdistance < 0.00001)
-						{
-							localZ.pop_back();
-							localWeight.pop_back();
-						}
-					}
-					DEMData[jj*m_nwidth + ii] = 0.0;
-					double totalWeight = 0.0;
-					for (int iii = 0; iii < localZ.size(); iii++)
-					{
-						totalWeight += localWeight[iii];
-						if (localZ[iii] < zmin)
-						{
-							localZ[iii] = zmin;
-						}
-						if (localZ[iii] > zmax)
-						{
-							localZ[iii] = zmax;
-						}
-						DEMData[jj*m_nwidth + ii] += localZ[iii] * localWeight[iii];
-					}
-					DEMData[jj*m_nwidth + ii] /= totalWeight;
-					DEMData[jj*m_nwidth + ii] = DEMData[jj*m_nwidth + ii] * 0.5 + 0.5 *IPZ;
-					if (DEMData[jj*m_nwidth + ii] == -9999)
-					{
-						printf("ca");
-					}
-					//邻域起作用//
-				}
-			}
-	}
-
 }
 //格网法//
 bool getRunDir(string&runPathDir)
@@ -557,39 +194,63 @@ bool getlasPoints(const char*path, point3D*&points,int&las_pt_num, CloudHeader&m
 	}
 	lasreader->close();
 }
-bool DEM_sin(const char*path, myRegon blockRegion, double xSize, double ySize, float*&path_Img)
+bool DSM_sin(const char*path, myRegon blockRegion, double xSize, double ySize, float*&DEMData)
 {
 	point3D* points; int las_pt_num; CloudHeader myheader;
 	getlasPoints(path,points, las_pt_num, myheader);
-	double*points_after;
-	double*myZ;
-	int Num_after = 0;
-	InitialProc(points, las_pt_num, myheader, points_after, myZ, Num_after);
-	if (Num_after < 20)
+	
+	vector<cv::Point2f>points_after; points_after.clear();
+	vector<float>points_z; points_z.clear();
+	InitialProc(points, las_pt_num, myheader, points_after, points_z);
+	if (points_after.size() < 20)
 	{
-		delete[]points_after;
-		delete[]myZ;
 		return false;
 	}
 	delete[]points;
-	int**myTriangle;
-	int**nb_myTriangle;
-	int TriNum = 0;
-	//Triangle(points_after, Num_after, myTriangle);
-	Triangle_Neighbor(points_after, Num_after, myTriangle, nb_myTriangle, TriNum);
+	//构建KD树//
+	cv::Mat source = cv::Mat(points_after).reshape(1);
+	cv::flann::KDTreeIndexParams indexParams(2);
+	cv::flann::Index kdtree(source, indexParams);
+
 	double xresolution = xSize;
 	double yresolution = -1 * ySize;
-	//Interpola(lasHdr,points_after, myZ, Num_after, myTriangle,xresolution, yresolution, path_Img);
-	Interpola_Neighbor(blockRegion, points_after, myZ, Num_after, myTriangle, nb_myTriangle, TriNum, xresolution, yresolution, path_Img);
-	for (int i = 0; i < TriNum; i++)
+
+	double adsTransform[6];
+	adsTransform[0] = blockRegion.xmin;
+	adsTransform[3] = blockRegion.ymax;
+	adsTransform[2] = 0;
+	adsTransform[4] = 0;
+	adsTransform[1] = xresolution;
+	adsTransform[5] = yresolution;
+	int m_nwidth = (blockRegion.xmax - blockRegion.xmin) / adsTransform[1];
+	int m_nheight = (blockRegion.ymin - blockRegion.ymax) / adsTransform[5];
+	DEMData = new float[m_nwidth*m_nheight];
+	for (int i = 0; i < m_nwidth*m_nheight; i++)
 	{
-		delete[]myTriangle[i];
-		delete[]nb_myTriangle[i];
+		DEMData[i] = -9999;
 	}
-	delete[]myTriangle;
-	delete[]nb_myTriangle;
-	delete[]points_after;
-	delete[]myZ;
+	//开始内插//
+	float totalWeight = 0.0;
+	for (int i = 0; i < m_nheight; i++) 
+	for(int j=0;j< m_nwidth;j++){
+		DEMData[i*m_nwidth + j] = 0;
+		int queryNum = 6;//用于设置返回邻近点的个数
+		vector<float> vecQuery(2);//存放查询点的容器
+		vector<int> vecIndex(queryNum);//存放返回的点索引
+		vector<float> vecDist(queryNum);//存放距离
+		cv::flann::SearchParams params(32);
+		vecQuery = { (float)(blockRegion.xmin+j* xresolution),(float)(blockRegion.ymax + i * yresolution) };
+		kdtree.knnSearch(vecQuery, vecIndex, vecDist, queryNum, params);
+		totalWeight = 0.0;
+		for (int k = 0; k < queryNum; k++)
+		{
+			DEMData[i*m_nwidth + j] += (1 / (vecDist[k]+0.000001))*points_z[vecIndex[k]];
+			totalWeight += (1 / (vecDist[k] + 0.000001));
+		}
+		DEMData[i*m_nwidth + j] /= totalWeight;
+	}
+	points_after.clear();
+	points_z.clear();
 	return true;
 }
 void Pretreatment_seg(const char*srcPath, string &dstPath)
@@ -870,7 +531,9 @@ int main(int argc, char**argv)
 			printf("cannot open the file %s !", path_Img);
 			return 0;
 		}
+#pragma omp parallel for num_threads(6)  
 		for(int i=0;i<lasPaths.size();i++){
+			printf("%d\n", i);
 				float*DEMData;
 				myRegon blockRegion;
 				LASreadOpener lasreadopener;
@@ -890,7 +553,7 @@ int main(int argc, char**argv)
 				{
 					continue;
 				}
-				bool mark = DEM_sin(lasPaths[i].c_str(), blockRegion, xResolution, yResolution, DEMData);
+				bool mark = DSM_sin(lasPaths[i].c_str(), blockRegion, xResolution, yResolution, DEMData);
 				if (!mark)
 				{
 					continue;
@@ -898,30 +561,6 @@ int main(int argc, char**argv)
 				float*DEMData_temp=new float[myWidth*myHeight];
 				poDataset_out->RasterIO(GF_Read, startX, startY, myWidth, myHeight, DEMData_temp, myWidth, myHeight, GDT_Float32, 1, 0, 0, 0, 0);
 
-				////检查边框//
-				//for (int j = 0; j < myWidth; j++)
-				//{
-				//	if (DEMData[0 * myWidth + j] == -9999)
-				//	{
-				//		DEMData[0 * myWidth + j] = DEMData[1 * myWidth + j];
-				//	}
-				//	if (DEMData[(myHeight - 1)* myWidth + j] == -9999)
-				//	{
-				//		DEMData[(myHeight - 1)* myWidth + j] = DEMData[1 * myWidth + j];
-				//	}
-				//}
-				//for (int j = 0; j < myHeight; j++)
-				//{
-				//	if (DEMData[j * myWidth + 0] == -9999)
-				//	{
-				//		DEMData[j * myWidth + 0] = DEMData[j * myWidth + 1];
-				//	}
-				//	if (DEMData[j * myWidth + myWidth - 1] == -9999)
-				//	{
-				//		DEMData[j * myWidth + myWidth - 1] = DEMData[j * myWidth + myWidth - 2];
-				//	}
-				//}
-				//对比检查//
 				for(int i=0;i<myHeight;i++)
 					for (int j = 0; j < myWidth; j++)
 					{
@@ -934,8 +573,9 @@ int main(int argc, char**argv)
 				poDataset_out->RasterIO(GF_Write, startX, startY, myWidth, myHeight, DEMData, myWidth, myHeight, GDT_Float32, 1, 0, 0, 0, 0);
 				delete[]DEMData;
 			}
-		
+#pragma omp parallel for num_threads(6)  
 		for (int i = 0; i < borderPaths.size(); i++) {
+			printf("%d\n", i);
 			float*DEMData;
 			myRegon blockRegion;
 			LASreadOpener lasreadopener;
@@ -955,7 +595,7 @@ int main(int argc, char**argv)
 			{
 				continue;
 			}
-			bool mark = DEM_sin(borderPaths[i].c_str(), blockRegion, xResolution, yResolution, DEMData);
+			bool mark = DSM_sin(borderPaths[i].c_str(), blockRegion, xResolution, yResolution, DEMData);
 			if (!mark)
 			{
 				continue;
@@ -963,29 +603,7 @@ int main(int argc, char**argv)
 			float*DEMData_temp = new float[myWidth*myHeight];
 			poDataset_out->RasterIO(GF_Read, startX, startY, myWidth, myHeight, DEMData_temp, myWidth, myHeight, GDT_Float32, 1, 0, 0, 0, 0);
 
-			////检查边框//
-			//for (int j = 0; j < myWidth; j++)
-			//{
-			//	if (DEMData[0 * myWidth + j] == -9999)
-			//	{
-			//		DEMData[0 * myWidth + j] = DEMData[1 * myWidth + j];
-			//	}
-			//	if (DEMData[(myHeight - 1)* myWidth + j] == -9999)
-			//	{
-			//		DEMData[(myHeight - 1)* myWidth + j] = DEMData[1 * myWidth + j];
-			//	}
-			//}
-			//for (int j = 0; j < myHeight; j++)
-			//{
-			//	if (DEMData[j * myWidth + 0] == -9999)
-			//	{
-			//		DEMData[j * myWidth + 0] = DEMData[j * myWidth + 1];
-			//	}
-			//	if (DEMData[j * myWidth + myWidth - 1] == -9999)
-			//	{
-			//		DEMData[j * myWidth + myWidth - 1] = DEMData[j * myWidth + myWidth - 2];
-			//	}
-			//}
+			
 			//对比检查//
 			for (int i = 0; i < myHeight; i++)
 				for (int j = 0; j < myWidth; j++)
